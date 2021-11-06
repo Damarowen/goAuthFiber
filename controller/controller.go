@@ -3,7 +3,9 @@ package controller
 import (
 	"auth-go-fiber/database"
 	"auth-go-fiber/models"
+	"fmt"
 	"github.com/dgrijalva/jwt-go"
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"golang.org/x/crypto/bcrypt"
 	"strconv"
@@ -12,44 +14,84 @@ import (
 
 const SecretKey = "secret"
 
+type ErrorResponse struct {
+	FailedField string
+	Tag         string
+	Value       string
+	Message     string
+}
+
+func ValidateStruct(models interface{}) []*ErrorResponse {
+	var errors []*ErrorResponse
+	validate := validator.New()
+	err := validate.Struct(models)
+	if err != nil {
+		for _, err := range err.(validator.ValidationErrors) {
+			var element ErrorResponse
+			element.FailedField = err.StructNamespace()
+			element.Tag = err.Tag()
+			element.Value = err.Param()
+			element.Message = err.Error()
+
+			errors = append(errors, &element)
+		}
+	}
+	return errors
+}
 
 func Hello(c *fiber.Ctx) error {
 	return c.SendString("Hello, World 👋!")
 }
 
 func Register(c *fiber.Ctx) error {
-	var data map[string]string
 
-	err := c.BodyParser(&data)
-
-	if err != nil {
-		return err
+	//var data map[string]string
+	user := new(models.User)
+	if err := c.BodyParser(user); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"message": err.Error(),
+		})
 	}
 
-	password, _ := bcrypt.GenerateFromPassword([]byte(data["password"]), 14)
-
-	user := models.User{
-		Name:     data["name"],
-		Email:    data["email"],
-		Password: password,
+	errors := ValidateStruct(*user)
+	if errors != nil {
+		return c.JSON(errors)
 	}
 
-	database.DB.Create(&user)
+	fmt.Println(*user)
 
-	return c.JSON(user)
+	//* convert payload password to byte
+	password, _ := bcrypt.GenerateFromPassword([]byte(user.Password), 14)
+
+	//* convert payload password from byte to string
+	save := models.User{
+		Name:     user.Name,
+		Email:    user.Email,
+		Password: string(password),
+	}
+
+	fmt.Println(save)
+
+	database.DB.Create(&save)
+
+	return c.JSON(save)
 }
 
 func Login(c *fiber.Ctx) error {
-	var data map[string]string
+	//var data map[string]string
+	payload := new(models.CheckUser)
 
-	if err := c.BodyParser(&data); err != nil {
+	if err := c.BodyParser(&payload); err != nil {
 		return err
 	}
-
+	errors := ValidateStruct(*payload)
+	if errors != nil {
+		return c.JSON(errors)
+	}
 	var user models.User
 
 	//* search user
-	database.DB.Where("email = ?", data["email"]).First(&user)
+	database.DB.Where("email = ?", payload.Email).First(&user)
 
 	//* if not fount
 	if user.Id == 0 {
@@ -59,7 +101,7 @@ func Login(c *fiber.Ctx) error {
 		})
 	}
 
-	err := bcrypt.CompareHashAndPassword(user.Password, []byte(data["password"]))
+	err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(payload.Password))
 
 	if err != nil {
 		c.Status(fiber.StatusBadRequest)
@@ -94,6 +136,7 @@ func Login(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"message": "success login",
+		"user":    user,
 	})
 }
 
