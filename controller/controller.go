@@ -2,10 +2,10 @@ package controller
 
 import (
 	"auth-go-fiber/database"
+	"auth-go-fiber/helpers"
 	"auth-go-fiber/models"
 	"fmt"
 	"github.com/dgrijalva/jwt-go"
-	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"golang.org/x/crypto/bcrypt"
 	"strconv"
@@ -14,33 +14,37 @@ import (
 
 const SecretKey = "secret"
 
-type ErrorResponse struct {
-	FailedField string
-	Tag         string
-	Value       string
-	Message     string
-}
-
-func ValidateStruct(models interface{}) []*ErrorResponse {
-	var errors []*ErrorResponse
-	validate := validator.New()
-	err := validate.Struct(models)
-	if err != nil {
-		for _, err := range err.(validator.ValidationErrors) {
-			var element ErrorResponse
-			element.FailedField = err.StructNamespace()
-			element.Tag = err.Tag()
-			element.Value = err.Param()
-			element.Message = err.Error()
-
-			errors = append(errors, &element)
-		}
-	}
-	return errors
-}
-
 func Hello(c *fiber.Ctx) error {
 	return c.SendString("Hello, World 👋!")
+}
+
+func Home(c *fiber.Ctx) error {
+
+	//TODO
+	//ambil dari bearer token
+
+	//* get token from cookies
+	cookie := c.Cookies("jwt")
+
+	//* parsing token
+	token, err := jwt.ParseWithClaims(cookie, &jwt.StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(SecretKey), nil
+	})
+
+	if err != nil {
+		c.Status(fiber.StatusUnauthorized)
+		return c.JSON(fiber.Map{
+			"message": "unauthenticated",
+		})
+	}
+
+	claims := token.Claims.(*jwt.StandardClaims)
+
+	var user models.User
+
+	database.DB.Where("id = ?", claims.Issuer).First(&user)
+
+	return c.JSON(user)
 }
 
 func Register(c *fiber.Ctx) error {
@@ -53,7 +57,7 @@ func Register(c *fiber.Ctx) error {
 		})
 	}
 
-	errors := ValidateStruct(*user)
+	errors := helpers.ValidateStruct(*user)
 	if errors != nil {
 		return c.JSON(errors)
 	}
@@ -61,7 +65,10 @@ func Register(c *fiber.Ctx) error {
 	fmt.Println(*user)
 
 	//* convert payload password to byte
-	password, _ := bcrypt.GenerateFromPassword([]byte(user.Password), 14)
+	password, err := bcrypt.GenerateFromPassword([]byte(user.Password), 14)
+	if err != nil {
+		return c.JSON(errors)
+	}
 
 	//* convert payload password from byte to string
 	save := models.User{
@@ -84,7 +91,7 @@ func Login(c *fiber.Ctx) error {
 	if err := c.BodyParser(&payload); err != nil {
 		return err
 	}
-	errors := ValidateStruct(*payload)
+	errors := helpers.ValidateStruct(*payload)
 	if errors != nil {
 		return c.JSON(errors)
 	}
@@ -141,8 +148,10 @@ func Login(c *fiber.Ctx) error {
 }
 
 func User(c *fiber.Ctx) error {
+	//* get token from cookies
 	cookie := c.Cookies("jwt")
 
+	//* parsing token
 	token, err := jwt.ParseWithClaims(cookie, &jwt.StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return []byte(SecretKey), nil
 	})
